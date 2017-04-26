@@ -2,7 +2,7 @@
 
 server.c
 
-Names:	Hannah Deen		Perri Helen
+Names:	Hannah Deen		Perri Adams
 
 RINs:	661135402		661176345
 
