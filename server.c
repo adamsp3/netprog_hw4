@@ -1,16 +1,10 @@
 /* 
-
 server.c
-
 Names:	Hannah Deen		Perri Adams
-
 RINs:	661135402		661176345
-
 RCSIDs:	deenh			adamsp3
-
 Your task for this team-based (max. 2) assignment is to implement a file syncing utility similar in (reduced)
 functionality to rsync.
-
 	run:
 		./[executable] [server/client] [port number]
 	ex:	./syncr server 12345
@@ -33,81 +27,160 @@ functionality to rsync.
 #include <assert.h>
 #include <fcntl.h>
 
-#define PAYLOAD_SIZE 1016
-#define HEADER_SIZE 5
-#define ACK 1
-#define FIN 2
-#define PACKET_SIZE 1024
+#define BUFFER_SIZE 1024
+
+void die(const char*);
 
 void sigchld_handler(int s)
 {
     while(waitpid(-1, NULL, WNOHANG) > 0);
 }
 
+void server(int port);
+void client(int port);
+
 int main(int argc, char**argv)
 {
+	if(argc < 3)
+	{
+		printf("too few arguments\n");
+		exit( EXIT_FAILURE );
 
-    int sockfd, numbytes, local_port;  // listen on sock_fd, new connection on new_fd
-    struct sockaddr_storage their_addr; // connector's address information
-    socklen_t sin_size;
-    struct sigaction sa;
-    char s[INET6_ADDRSTRLEN];
-
-    //creating the socket
-    struct sockaddr_in servaddr, temp_addr;
-    sockfd = socket(AF_INET, SOCK_DGRAM, 0);
-    bzero(&servaddr, sizeof(servaddr));
-    servaddr.sin_family = AF_INET;
-    servaddr.sin_addr.s_addr = htonl(INADDR_ANY);
-
-    //getting random port assigment
-    servaddr.sin_port = htons(0);
-
-    //binding port to sokect
-    bind(sockfd, (struct sockaddr*)&servaddr, sizeof(servaddr));
-    socklen_t sz = sizeof(temp_addr);
-
-    int ret = getsockname(sockfd, (struct sockaddr*)&temp_addr, &sz);
-    if (ret < 0) {
-        printf("Problem!\n");
-        exit(-1);
-    }
-    char buffer[1028];
-    //converting to the correct byte order for register
-    local_port = ntohs(temp_addr.sin_port);
-
-   
-        
-    //specified in the assigment
-    printf("Port number: %d\n", local_port);
-
-    sa.sa_handler = sigchld_handler; // reap all dead processes
-    sigemptyset(&sa.sa_mask);
-    sa.sa_flags = SA_RESTART;
-    if (sigaction(SIGCHLD, &sa, NULL) == -1) {
-        perror("sigaction");
-        exit(1);
-    }
-
-    printf("server: waiting for connections...\n");
-
-    while(1) {  // main accept() loop
-    	
-        sin_size = sizeof their_addr;
-        numbytes = recvfrom(sockfd, buffer,  1028, 0, (struct sockaddr *)&their_addr, &sin_size);
-        printf("%d\n", numbytes );
-        inet_ntop(their_addr.ss_family,
-            get_in_addr((struct sockaddr *)&their_addr),
-            s, sizeof s);
-        printf("server: got connection from %s\n", s);
-        
-        //check_op(buffer);
-
-
-
-        //close(new_fd);  // parent doesn't need this
-    }
+	}
+	if(strcmp(argv[1], "server") == 0)
+	{
+		server(atoi(argv[2]));
+	}
+	else if(strcmp(argv[1], "client") == 0)
+	{
+		client(atoi(argv[2]));
+	}
+	else
+	{
+		printf("inputs must be either \"server\" or \"client\" \n");
+	}
+    
     return 0;
+}
+
+
+
+void die(const char *msg)
+{
+    perror(msg);
+    exit(EXIT_FAILURE);
+}
+
+void server(int port)
+{
+	/* Create the listener socket as TCP socket */
+  	int sd = socket( PF_INET, SOCK_STREAM, 0 );
+  	/* sd is the socket descriptor */
+  	/*  and SOCK_STREAM == TCP       */
+
+  	if ( sd < 0 )
+  	{
+    	perror( "socket() failed" );
+    	exit( EXIT_FAILURE );
+  	}
+
+  	/* socket structures */
+  	struct sockaddr_in server;
+
+  	server.sin_family = PF_INET;
+  	server.sin_addr.s_addr = INADDR_ANY;
+
+  	/* htons() is host-to-network-short for marshalling */
+  	/* Internet is "big endian"; Intel is "little endian" */
+  	server.sin_port = htons( port );
+  	int len = sizeof( server );
+
+  	if ( bind( sd, (struct sockaddr *)&server, len ) < 0 )
+  	{
+    	perror( "bind() failed" );
+    	exit( EXIT_FAILURE );
+  	}
+
+  	listen( sd, 5 );   /* 5 is the max number of waiting clients */
+  	printf( "PARENT: Listener bound to port %d\n", port );
+
+  	struct sockaddr_in client;
+  	int fromlen = sizeof( client );
+  	printf( "server address is %s\n", inet_ntoa( server.sin_addr ) );
+
+  	char buffer[ BUFFER_SIZE ];
+
+  	while ( 1 )
+  	{
+    	int newsock = accept( sd, (struct sockaddr *)&client,
+                          (socklen_t*)&fromlen );
+    	printf( "PARENT: Accepted client connection\n" );
+
+    	/* handle new socket in a child process,
+       allowing the parent process to immediately go
+       back to the accept() call */
+    	}
+
+}
+
+
+void client(int port)
+{
+	/* create TCP client socket (endpoint) */
+	int sock = socket( PF_INET, SOCK_STREAM, 0 );
+
+  	if ( sock < 0 )
+  	{	
+    	perror( "socket() failed" );
+    	exit( EXIT_FAILURE );
+  	}
+
+  	struct hostent * hp = gethostbyname( "linux00.cs.rpi.edu" );
+  	if ( hp == NULL )
+  	{
+    	perror( "gethostbyname() failed" );
+    	exit( EXIT_FAILURE );
+  	}
+
+  	struct sockaddr_in server;
+  	server.sin_family = PF_INET;
+  	memcpy( (void *)&server.sin_addr, (void *)hp->h_addr,
+          hp->h_length );
+  	server.sin_port = htons( port );
+
+  	printf( "server address is %s\n", inet_ntoa( server.sin_addr ) );
+
+  	if ( connect( sock, (struct sockaddr *)&server,
+                sizeof( server ) ) < 0 )
+  	{
+    	perror( "connect() failed" );
+    	exit( EXIT_FAILURE );
+  	}
+
+  	char * msg = "hello world";
+  	int n = write( sock, msg, strlen( msg ) );
+	fflush( NULL );
+  	if ( n < strlen( msg ) )
+  	{
+    	perror( "write() failed" );
+    	exit( EXIT_FAILURE );
+  	}
+
+  	char buffer[ BUFFER_SIZE ];
+  	n = read( sock, buffer, BUFFER_SIZE );  // BLOCK
+  	if ( n < 0 )
+	{
+    	perror( "read() failed" );
+	    exit( EXIT_FAILURE );
+  	}
+  	else
+  	{
+    	buffer[n] = '\0';
+    	printf( "Received message from server: %s\n", buffer );
+  	}
+
+  close( sock );
+
 }
 
 
