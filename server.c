@@ -26,6 +26,10 @@ functionality to rsync.
 #include <stdarg.h>
 #include <assert.h>
 #include <fcntl.h>
+#include <sys/stat.h>
+#include <stdlib.h>
+ #include <sys/uio.h>
+
 
 #define BUFFER_SIZE 1024
 
@@ -44,10 +48,9 @@ int main(int argc, char**argv)
 	if(argc < 3)
 	{
 		printf("too few arguments\n");
-		exit(EXIT_FAILURE);
+		exit( EXIT_FAILURE );
 
 	}
-  
 	if(strcmp(argv[1], "server") == 0)
 	{
 		server(atoi(argv[2]));
@@ -61,7 +64,7 @@ int main(int argc, char**argv)
 		printf("inputs must be either \"server\" or \"client\" \n");
 	}
     
-  return 0;
+    return 0;
 }
 
 
@@ -75,14 +78,14 @@ void die(const char *msg)
 void server(int port)
 {
 	/* Create the listener socket as TCP socket */
-  	int sd = socket(PF_INET, SOCK_STREAM, 0);
+  	int sd = socket( PF_INET, SOCK_STREAM, 0 );
   	/* sd is the socket descriptor */
   	/*  and SOCK_STREAM == TCP       */
 
-  	if (sd < 0)
+  	if ( sd < 0 )
   	{
-    	perror("socket() failed");
-    	exit(EXIT_FAILURE);
+    	perror( "socket() failed" );
+    	exit( EXIT_FAILURE );
   	}
 
   	/* socket structures */
@@ -93,34 +96,129 @@ void server(int port)
 
   	/* htons() is host-to-network-short for marshalling */
   	/* Internet is "big endian"; Intel is "little endian" */
-  	server.sin_port = htons(port);
-  	int len = sizeof(server);
+  	server.sin_port = htons( port );
+  	int len = sizeof( server );
 
-  	if (bind(sd, (struct sockaddr *)&server, len) < 0)
+  	if ( bind( sd, (struct sockaddr *)&server, len ) < 0 )
   	{
-    	perror("bind() failed");
-    	exit(EXIT_FAILURE);
+    	perror( "bind() failed" );
+    	exit( EXIT_FAILURE );
   	}
 
-  	listen(sd, 5);   /* 5 is the max number of waiting clients */
-  	printf("PARENT: Listener bound to port %d\n", port);
+  	listen( sd, 5 );   /* 5 is the max number of waiting clients */
+  	printf( "port %d\n", port );
 
   	struct sockaddr_in client;
-  	int fromlen = sizeof(client);
-  	printf("server address is %s\n", inet_ntoa(server.sin_addr));
+  	int fromlen = sizeof( client );
+  	printf( "server address is %s\n", inet_ntoa( server.sin_addr ) );
 
   	char buffer[ BUFFER_SIZE ];
 
-  	while (1)
-  	{
-    	int newsock = accept(sd, (struct sockaddr *)&client,
-                          (socklen_t*)&fromlen);
-    	printf("PARENT: Accepted client connection\n");
+  	
+	int newsock = accept( sd, (struct sockaddr *)&client,
+                          (socklen_t*)&fromlen );
+	printf( "Accepted client connection\n" );
 
     	/* handle new socket in a child process,
        allowing the parent process to immediately go
        back to the accept() call */
+    
+
+    /* Create the temporary directory */
+  	char template[] = "/tmp/tmpdir.XXXXXX";
+  	char *tmp_dirname = mkdtemp (template);
+
+  	if(tmp_dirname == NULL)
+  	{
+		perror ("tempdir: error: Could not create tmp directory");
+    	exit (EXIT_FAILURE);
+  	}
+
+  	printf("%s\n", tmp_dirname );
+
+  	/* Change directory */
+  	if (chdir (tmp_dirname) == -1)
+  	{
+    	perror ("tempdir: error: ");
+    	exit (EXIT_FAILURE);
+  	}
+
+  	FILE *fp = NULL;
+
+    fp = fopen(".4220_file_list.txt" ,"a+");
+
+    if(fp == NULL)
+    {
+    	perror ("fopen: error: ");
+    	exit (EXIT_FAILURE);
+    }
+    fprintf(fp, "This is testing for fprintf...\n");
+   	fputs("This is testing for fputs...\n", fp);
+   	fclose(fp);
+
+   	int fd;
+    struct stat file_stat;
+    char file_size[256];
+    int remain_data;
+    int sent_bytes = 0;
+    int offset;
+
+
+   	fd = open(".4220_file_list.txt", O_RDONLY);
+    if (fd == -1)
+    {
+        perror( "open() failed" );
+    	exit( EXIT_FAILURE );
+    }
+
+   	/* Get file stats */
+    if (fstat(fd, &file_stat) < 0)
+    {
+        perror( "fstat() failed" );
+    	exit( EXIT_FAILURE );
+    }
+
+    fprintf(stdout, "File Size: \n%lld bytes\n", file_stat.st_size);
+
+    sprintf(file_size, "%lld", file_stat.st_size);
+
+    /* Sending file size */
+    len = send(newsock, file_size, sizeof(file_size), 0);
+    if (len < 0)
+    {
+    	perror( "send() failed" );
+    	exit( EXIT_FAILURE );
+    }
+
+    fprintf(stdout, "Server sent %d bytes for the size\n", len);
+
+    offset = 0;
+    remain_data = file_stat.st_size;
+
+    /* Sending file data */
+    int bytes_read = read(fd, buffer, sizeof(buffer));
+
+    if (bytes_read < 0) 
+    {
+        perror( "read() failed" );
+    	exit( EXIT_FAILURE );
+    }
+    while (((sent_bytes = send(newsock, buffer, BUFFER_SIZE, 0)) > 0) && (remain_data > 0))
+    {
+        fprintf(stdout, "1. Server sent %d bytes from file's data, offset is now : %d and remaining data = %d\n", sent_bytes, offset, remain_data);
+        remain_data -= sent_bytes;
+        fprintf(stdout, "2. Server sent %d bytes from file's data, offset is now : %d and remaining data = %d\n", sent_bytes, offset, remain_data);
+        
+        int bytes_read = read(fd, buffer, sizeof(buffer));
+    	if (bytes_read == 0) // We're done reading from the file
+        	break;
+
+    	if (bytes_read < 0) 
+    	{
+        	perror( "read() failed" );
+    		exit( EXIT_FAILURE );
     	}
+    }
 
 }
 
@@ -128,59 +226,66 @@ void server(int port)
 void client(int port)
 {
 	/* create TCP client socket (endpoint) */
-	int sock = socket(PF_INET, SOCK_STREAM, 0);
+	int sock = socket( PF_INET, SOCK_STREAM, 0 );
 
-  	if (sock < 0)
+  	if ( sock < 0 )
   	{	
-    	perror("socket() failed");
-    	exit(EXIT_FAILURE);
-  	}
-
-  	struct hostent * hp = gethostbyname("0.0.0.0");
-  	if (hp == NULL)
-  	{
-    	perror("gethostbyname() failed");
-    	exit(EXIT_FAILURE);
+    	perror( "socket() failed" );
+    	exit( EXIT_FAILURE );
   	}
 
   	struct sockaddr_in server;
   	server.sin_family = PF_INET;
-  	memcpy((void *)&server.sin_addr, (void *)hp->h_addr,
-          hp->h_length);
-  	server.sin_port = htons(port);
+  	server.sin_port = htons( port );
 
-  	printf("server address is %s\n", inet_ntoa(server.sin_addr));
+  	printf( "server address is %s\n", inet_ntoa( server.sin_addr ) );
 
-  	if (connect(sock, (struct sockaddr *)&server,
-                sizeof(server)) < 0)
+  	if ( connect( sock, (struct sockaddr *)&server,
+                sizeof( server ) ) < 0 )
   	{
-    	perror("connect() failed");
-    	exit(EXIT_FAILURE);
+    	perror( "connect() failed" );
+    	exit( EXIT_FAILURE );
   	}
 
   	char * msg = "hello world";
-  	int n = write(sock, msg, strlen(msg));
-	  fflush(NULL);
-  	if (n < strlen(msg))
+  	int n = write( sock, msg, strlen( msg ) );
+	fflush( NULL );
+  	if ( n < strlen( msg ) )
   	{
-    	perror("write() failed");
-    	exit(EXIT_FAILURE);
+    	perror( "write() failed" );
+    	exit( EXIT_FAILURE );
   	}
 
   	char buffer[ BUFFER_SIZE ];
-  	n = read(sock, buffer, BUFFER_SIZE);  // BLOCK
-  	if (n < 0)
-	  {
-    	perror("read() failed");
-	    exit(EXIT_FAILURE);
-  	}
-  	else
-  	{
-    	buffer[n] = '\0';
-    	printf("Received message from server: %s\n", buffer);
-  	}
 
-  close(sock);
+    int file_size;
+    FILE *received_file;
+    int remain_data = 0;
+    ssize_t len;
+
+  	/* Receiving file size */
+    recv(sock, buffer, BUFSIZ, 0);
+    file_size = atoi(buffer);
+    fprintf(stdout, "File size : %d\n", file_size);
+
+    received_file = fopen(".4220_file_list.txt", "w");
+    if (received_file == NULL)
+    {
+        perror( "fopen() failed" );
+    	exit( EXIT_FAILURE );
+    }
+    printf("hello\n");
+
+    remain_data = file_size;
+
+    while (((len = recv(sock, buffer, BUFSIZ, 0)) > 0) && (remain_data > 0))
+    {
+        fwrite(buffer, sizeof(char), len, received_file);
+        remain_data -= len;
+        fprintf(stdout, "Receive %zd bytes:- %d bytes\n", len, remain_data);
+    }
+
+  close( sock );
 
 }
 
