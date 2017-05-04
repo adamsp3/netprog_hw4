@@ -314,14 +314,21 @@ void client(int port)
         fprintf(stdout, "Receive %zd bytes:- %d bytes\n", len, remain_data);
     }
 
-    FILE *fp = fopen(".4220_file_list_serv.txt", "w+");
+    FILE *matches = fopen(".matches.txt", "w+");
+    //FILE *mismatches = fopen(".mismatches.txt", "w+");
+    FILE *fp = fopen(".4220_file_list.txt", "w+");
     fprintf(fp, "b468ef8dfcc96cc15de74496447d7b45    Assignment4.pdf\n");
     fputs("d41d8cd98f00b204e9800998ecf8425e    foo.txt\n", fp);
+    fputs("d41d8cd98f00b204e9800998ecf8425e    f3o.txt\n", fp);
     fclose(fp);
-    fp = fopen(".4220_file_list_serv.txt", "r+");
+    
+    fp = fopen(".4220_file_list.txt", "r+");
+
+
     if(fp){
       int ct = 0;
       rewind(received_file);
+      char* to_server[BUFSIZ];
       char* s_MD5hash = calloc(BUFFER_SIZE,sizeof(char));
       char* s_fname = calloc(BUFFER_SIZE,sizeof(char));
       while(fscanf(received_file,"%s %s", s_MD5hash, s_fname)!=EOF){
@@ -329,17 +336,42 @@ void client(int port)
         char* c_fname = calloc(128,sizeof(char));
         rewind(fp);
         while(fscanf(fp,"%s %s", c_MD5hash, c_fname)!=EOF){
-          if(strncmp(s_fname,c_fname,128)){
-            if(strncmp(s_MD5hash,c_MD5hash,128)){
+          if(strncmp(s_fname,c_fname,128)==0){
+            if(strncmp(s_MD5hash,c_MD5hash,128)==0){
               fprintf(stdout, "hash match\n" );
+              fprintf(matches,"%s %s\n",s_MD5hash, s_fname);
             } 
             else{
               fprintf(stdout, "hash no match\n");
+              fprintf(matches,"%s %s\n",s_MD5hash, s_fname);
+              //query
             }
           }
           else{
             fprintf(stdout, "nothing matches\n");
+            //keep going
           }
+        }
+        //copy to client here, no match
+
+      }
+
+      rewind(fp);
+      char* c_MD5hash = calloc(128,sizeof(char));
+      char* c_fname = calloc(128,sizeof(char));
+      while(fscanf(fp,"%s %s", c_MD5hash, c_fname)!=EOF){
+        char* m_MD5hash = calloc(128,sizeof(char));
+        char* m_fname = calloc(128,sizeof(char));
+        rewind(matches);
+        while(fscanf(matches,"%s %s", m_MD5hash, m_fname)!=EOF){
+          if(strncmp(m_fname,c_fname,128)==0){
+            break;
+          }
+        }
+        if(strncmp(m_fname,c_fname,128)!=0){
+          fprintf(stdout, "hi!%s %s\n", m_fname,c_fname);
+          //no match
+          //copy to server
         }
       }
     }
