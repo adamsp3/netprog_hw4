@@ -31,7 +31,14 @@ functionality to rsync.
  #include <sys/uio.h>
 
 
-//#define BUFFER_SIZE 255
+#if defined(__APPLE__)
+#  define COMMON_DIGEST_FOR_OPENSSL
+#  include <CommonCrypto/CommonDigest.h>
+#  define SHA1 CC_SHA1
+#else
+#  include <openssl/md5.h>
+#endif
+
 #define BUFFER_SIZE 512
 
 void die(const char*);
@@ -156,11 +163,12 @@ void server(int port)
         perror ("fopen: error: ");
         exit (EXIT_FAILURE);
       }
+      //testing hashes
       fprintf(fp, "b468ef8dfcc96cc15de74496447d7b45    Assignment4.pdf\n");
       fputs("d41d8cd98f00b204e9800998ecf8427e    foo.txt\n", fp);
       fclose(fp);
       fp = fopen("foo.txt" ,"a+");
-      fputs("dogs\n", fp);
+      fputs("TESTING TESTING\n", fp);
       fclose(fp);
       
 
@@ -180,57 +188,55 @@ void server(int port)
         int sent_bytes = 0;
         int offset;
 
+        //sending .4220_file_list.txt file
         send_file(".4220_file_list.txt", buffer, newsock, 0);
 
+        
         char req_buff[BUFFER_SIZE];
-        n = recv(newsock, req_buff, BUFFER_SIZE, 0);
+        char garbage[BUFFER_SIZE];
+        char file[BUFFER_SIZE];
+        char hash[BUFFER_SIZE];
+        char buff2[BUFFER_SIZE];
+
+        int flsz;
+
+        //Gets number of requests
+        int n = recv(newsock, buffer, BUFFER_SIZE,0);
         if ( n < 0 ){
-          perror( "recv() failed\n");
-          exit(EXIT_FAILURE);
+          perror( "read failed\n");
         }
+        flsz = atoi(buffer);
+        fprintf(stdout, "File size : %d\n", flsz);
 
-        //get how much data
-
-          char garbage[BUFFER_SIZE];
-          char file[BUFFER_SIZE];
-          char hash[BUFFER_SIZE];
-          char buff2[BUFFER_SIZE];
-
-          //close(fd);
+        //recieves requests:
+        int i = 0;
+        for(; i < flsz; i++){
+          n = recv(newsock, req_buff, BUFFER_SIZE, 0);
+          if ( n < 0 ){
+            perror( "recv() failed\n");
+            exit(EXIT_FAILURE);
+          }
           if(strncmp(req_buff,"get",3)==0){
 
-            //int fd;
-            struct stat file_stat1;
-            char file_size1[256];
-            int remain_data1;
-            int seg_size1;
-            int sent_bytes1 = 0;
-            int offset1;
-
             sscanf (req_buff,"%s %s %s", garbage, hash, file);
-            
             send_file(file, buff2,newsock,1);
           }
-
+          
           else if(strncmp(req_buff,"put",3)==0){
-            scanf (req_buff,"%s %s %s", garbage,file, hash);
+            sscanf (req_buff,"%s %s %s", garbage, hash, file);
+            recv_file(file, buff2, newsock);
           }
-
+          
           else if(strncmp(req_buff,"query",5)==0){
             char* file2[BUFFER_SIZE];
             char* hash2[BUFFER_SIZE];
             scanf (req_buff,"%s %s %s %s", garbage,file, hash, file2, hash2);
-
           }
-          
-          fp = fopen("newfile.txt", "w");
-          fclose(fp);
+        }
 
-          recv_file("newfile.txt", req_buff, newsock);
-
-        //close(fd);
       }
 
+      //Closes tmp dir
       char rm_command[26];
 
       strncpy (rm_command, "rm -rf ", 7 + 1);
@@ -263,7 +269,7 @@ void client(int port)
     server.sin_family = PF_INET;
     server.sin_port = htons( port );
 
-    printf( "server address is %s\n", inet_ntoa( server.sin_addr ) );
+    printf( "server address is %s\n", inet_ntoa(server.sin_addr));
 
     if(connect( sock, (struct sockaddr *)&server,
                 sizeof( server ) ) < 0 )
@@ -276,7 +282,6 @@ void client(int port)
     char buffer2[BUFFER_SIZE];
 
     int file_size;
-    //FILE *received_file;
     int remain_data = 0;
     ssize_t len;
 
@@ -292,98 +297,72 @@ void client(int port)
       exit( EXIT_FAILURE );
     }
 
+    //recieves .4220_file_list_serv.txt from server
     recv_file(".4220_file_list_serv.txt", buffer, sock);
 
     FILE * received_file = fopen(".4220_file_list_serv.txt", "r");
     FILE *matches = fopen(".matches.txt", "w+");
-    FILE *fp = fopen(".4220_file_list.txt", "w+");
+    
+
     FILE *requests = fopen(".requests.txt", "w");
-    fprintf(fp, "b468ef8dfcc96cc15de74496447d7b45    Assignment4.pdf\n");
+
+    //For testing///////
+    FILE *fp = fopen(".4220_file_list.txt", "w+");
+    fprintf(fp, "b468ef8dfcc96cc15de74496447d7d45    Assignment4.pdf\n");
     fputs("d41d8cd98f00b204e9800998ecf8425e    f3o.txt\n", fp);
     fclose(fp);
-    
+    fp = fopen("f3o.txt", "w+");
+    fprintf(fp, "lalalalalalaala\n");
+    fputs("TESTING\n", fp);
+    fclose(fp);
+    ///////
+
     fp = fopen(".4220_file_list.txt", "r+");
 
-
+    int count = 0;
     if(fp){
       int ct = 0;
       rewind(received_file);
-      char* to_server[BUFFER_SIZE];
+
       char s_MD5hash[BUFFER_SIZE];
       char s_fname[BUFFER_SIZE];
       char c_MD5hash[BUFFER_SIZE];
       char c_fname[BUFFER_SIZE];
-      int i=0;
-      while(i < BUFFER_SIZE){
-        s_MD5hash[i] = 0;
-        s_fname[i] = 0;
-        i++;
-      }
 
       while(fscanf(received_file,"%s %s", s_MD5hash, s_fname)!=EOF){
-        i=0;
-        while(i < BUFFER_SIZE){
-          c_MD5hash[i] = 0;
-          c_fname[i] = 0;
-          i++;
-        }
+
         rewind(fp);
         while(fscanf(fp,"%s %s", c_MD5hash, c_fname)!=EOF){
           if(strncmp(s_fname,c_fname,128)==0){
             if(strncmp(s_MD5hash,c_MD5hash,128)==0){
-              fprintf(stdout, "hash match\n" );
               fprintf(matches,"%s %s\n",s_MD5hash, s_fname);
             } 
             else{
-              fprintf(stdout, "hash no match\n");
-              fprintf(matches,"%s %s\n",s_MD5hash, s_fname);
+              fprintf(matches, "%s %s\n",s_MD5hash, s_fname);
               //query
             }
             break;
           }
           else{
-            fprintf(stdout, "nothing matches\n");
             //keep going
           }
         }
 
         if(strncmp(s_fname,c_fname,128)!=0){
-          char req[BUFFER_SIZE];
-          sprintf(req,"%s %s %s", "get", s_MD5hash, s_fname);
-          fwrite(req, sizeof(char), BUFFER_SIZE, requests);
-
-          char get[BUFFER_SIZE];
-          sprintf(get,"%s %s %s", "get", s_MD5hash, s_fname);
-          fprintf(stdout, "%s", get);
-          cont = send(sock, get,BUFFER_SIZE,0);
-          fflush(NULL);
-          if (cont < 0){
-            perror( "send() failed" );
-            exit( EXIT_FAILURE );
-          }
-
+          fprintf(requests, "%s %s %s\n", "get", s_MD5hash, s_fname);
+          count++;
           /* Receiving file size */
-          recv_file(s_fname, buffer,sock);
+          //recv_file(s_fname, buffer,sock);
         }
       }
 
       rewind(fp);
-      i = 0;
-      while(i < BUFFER_SIZE){
-        c_MD5hash[i] = 0;
-        c_fname[i] = 0;
-        i++;
-      }
+
 
       while(fscanf(fp,"%s %s", c_MD5hash, c_fname)!=EOF){
         char m_MD5hash[BUFFER_SIZE];
         char m_fname[BUFFER_SIZE];
-        i = 0;
-        while(i < BUFFER_SIZE){
-          m_MD5hash[i] = 0;
-          m_fname[i] = 0;
-          i++;
-        }
+
         rewind(matches);
         while(fscanf(matches,"%s %s", m_MD5hash, m_fname)!=EOF){
           if(strncmp(m_fname,c_fname,128)==0){
@@ -391,11 +370,8 @@ void client(int port)
           }
         }
         if(strncmp(m_fname,c_fname,128)!=0){
-          char req[BUFFER_SIZE];
-          sprintf(req,"%s %s %s", "put", c_MD5hash, c_fname);
-          fwrite(req, sizeof(char), BUFFER_SIZE, requests);
-          fprintf(stdout, "To be written to server:%s %s\n", m_fname,c_fname); 
-
+          fprintf(requests,"%s %s %s\n", "put", c_MD5hash, c_fname); 
+          count++;
         }
       }
     }
@@ -404,8 +380,58 @@ void client(int port)
     fclose(fp);
     fclose(requests);
 
+
     char sendbuff[BUFFER_SIZE];
-    send_file(".requests.txt", sendbuff, sock, 0);
+
+    sprintf(sendbuff, "%d", count);
+    len = send(sock, sendbuff, BUFFER_SIZE, 0);
+    fflush(NULL);
+    if (len < 0){
+      perror( "send() failed" );
+      exit( EXIT_FAILURE );
+    }
+    fprintf(stdout, "Number of requests: %d\n", count);
+
+    requests = fopen(".requests.txt", "r");
+    char garbage[BUFFER_SIZE];
+    char file[BUFFER_SIZE];
+    char hash[BUFFER_SIZE];
+    char buff2[BUFFER_SIZE];
+    int i = 0;
+
+    rewind(requests);
+    for(; i < count; i++){
+
+      if(fgets(sendbuff, BUFFER_SIZE,requests) != NULL){
+        fprintf(stdout,"Request: %s", sendbuff);
+        n = send(sock, sendbuff, BUFFER_SIZE, 0); 
+        
+        if (n < 0){
+          perror( "send() failed\n");
+          exit(EXIT_FAILURE);
+        }
+
+        if(strncmp(sendbuff,"get",3)==0){
+
+          sscanf (sendbuff,"%s %s %s", garbage, hash, file);
+          recv_file(file, buffer,sock);
+
+        }
+        
+        else if(strncmp(sendbuff,"put",3)==0){
+          sscanf(sendbuff,"%s %s %s", garbage,hash,file);
+          send_file(file, buffer, sock, 0);
+        }
+        
+        else if(strncmp(sendbuff,"query",5)==0){
+          char* file2[BUFFER_SIZE];
+          char* hash2[BUFFER_SIZE];
+
+        }
+      }
+    }
+
+
     
 
     
@@ -464,44 +490,28 @@ int send_file(char* file, char* buffer, int newsock, int ack){
     seg_size = remain_data;
   }
 
-  /*
-  if(ack == 1){
-    char recbuff[3];
-    //char* ack1 = "ack";
-    recv(newsock,recbuff,BUFFER_SIZE,0);
-    if(strncmp(recbuff,"ack",3)== 0){
-      sent_bytes = send(newsock, buffer, BUFFER_SIZE, 0);
+  sent_bytes = send(newsock, buffer, BUFFER_SIZE, 0);
+
+  while (remain_data > 0 && sent_bytes > 0){
+    fflush(NULL);
+    fprintf(stdout, "1. Server sent %d bytes from file's data, offset is now : %d and remaining data = %d\n", sent_bytes, offset, remain_data);
+    remain_data -= sent_bytes;
+    fprintf(stdout, "2. Server sent %d bytes from file's data, offset is now : %d and remaining data = %d\n", sent_bytes, offset, remain_data);
+
+    if(remain_data <= BUFFER_SIZE){
+      seg_size = remain_data;
     }
-    else{
-      fprintf(stdout, "AHHHH %s", buffer);
-      return 0;
+
+    int bytes_read = read(fd, buffer, BUFFER_SIZE);
+    if (bytes_read == 0) // We're done reading from the file
+        break;
+
+    if (bytes_read < 0){
+      perror("read() failed");
+      exit( EXIT_FAILURE );
     }
-    */
-  //}
-  //else{
     sent_bytes = send(newsock, buffer, BUFFER_SIZE, 0);
-  //}
-
-    while (remain_data > 0 && sent_bytes > 0){
-      fflush(NULL);
-      fprintf(stdout, "1. Server sent %d bytes from file's data, offset is now : %d and remaining data = %d\n %s", sent_bytes, offset, remain_data, buffer);
-      remain_data -= sent_bytes;
-      fprintf(stdout, "2. Server sent %d bytes from file's data, offset is now : %d and remaining data = %d\n %d", sent_bytes, offset, remain_data, seg_size);
-
-      if(remain_data <= BUFFER_SIZE){
-        seg_size = remain_data;
-      }
-
-      int bytes_read = read(fd, buffer, BUFFER_SIZE);
-      if (bytes_read == 0) // We're done reading from the file
-          break;
-
-      if (bytes_read < 0){
-        perror("read() failed");
-        exit( EXIT_FAILURE );
-      }
-      sent_bytes = send(newsock, buffer, BUFFER_SIZE, 0);
-    }
+  }
   close(fd);
   return 0;
 }
@@ -525,7 +535,6 @@ int recv_file(char* file, char* buffer, int sock){
     perror( "fopen() failed" );
     exit( EXIT_FAILURE );
   }
-  //printf("hello\n");
 
   remain_data = file_size;
   int seg_size = BUFFER_SIZE;
@@ -535,20 +544,12 @@ int recv_file(char* file, char* buffer, int sock){
 
   while ((remain_data > 0) &&((len = recv(sock, buffer, BUFFER_SIZE,0)) > 0) && (remain_data > 0)){
       fwrite(buffer, sizeof(char), seg_size, received_file);
-      fprintf(stdout,"%s\n",buffer);
       remain_data -= len;
       if(remain_data <= BUFFER_SIZE){
         seg_size = remain_data;
       }
-      /*
-      char* ack = "ack";
-      send(sock,ack,sizeof(ack), 0);
-      fflush(NULL);
-      */
       fprintf(stdout, "Receive %zd bytes:- %d bytes\n", len, remain_data);
   }
-
-
 
   fclose(received_file);
   return 0;
