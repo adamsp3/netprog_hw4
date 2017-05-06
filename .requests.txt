@@ -1,2 +1,0 @@
-get d41d8cd98f00b204e9800998ecf8427e foo.txt
-put d41d8cd98f00b204e9800998ecf8425e f3o.txt
