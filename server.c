@@ -28,7 +28,10 @@ functionality to rsync.
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <stdlib.h>
- #include <sys/uio.h>
+#include <sys/uio.h>
+#include <time.h>
+#include <sys/stat.h>
+#include <dirent.h>
 
 
 #if defined(__APPLE__)
@@ -123,7 +126,34 @@ void server(int port)
     printf( "server address is %s\n", inet_ntoa( server.sin_addr ) );
 
     char buffer[BUFFER_SIZE];
+          /* Create the temporary directory */
+    char template[] = "/tmp/tmpdir.XXXXXX";
+    char *tmp_dirname = mkdtemp (template);
 
+    if(tmp_dirname == NULL)
+    {
+    perror ("tempdir: error: Could not create tmp directory");
+      exit (EXIT_FAILURE);
+    }
+
+    printf("%s\n", tmp_dirname );
+
+    /* Change directory */
+    if (chdir (tmp_dirname) == -1)
+    {
+      perror ("tempdir: error: ");
+      exit (EXIT_FAILURE);
+    }
+
+    FILE *fp = NULL;
+
+    fp = fopen(".4220_file_list.txt" ,"a+");
+
+    if(fp == NULL)
+    {
+      perror ("fopen: error: ");
+      exit (EXIT_FAILURE);
+    }
 
     while(1){    
       int newsock = accept(sd, (struct sockaddr *)&client,
@@ -133,43 +163,6 @@ void server(int port)
         /* handle new socket in a child process,
          allowing the parent process to immediately go
          back to the accept() call */
-      
-
-      /* Create the temporary directory */
-      char template[] = "/tmp/tmpdir.XXXXXX";
-      char *tmp_dirname = mkdtemp (template);
-
-      if(tmp_dirname == NULL)
-      {
-      perror ("tempdir: error: Could not create tmp directory");
-        exit (EXIT_FAILURE);
-      }
-
-      printf("%s\n", tmp_dirname );
-
-      /* Change directory */
-      if (chdir (tmp_dirname) == -1)
-      {
-        perror ("tempdir: error: ");
-        exit (EXIT_FAILURE);
-      }
-
-      FILE *fp = NULL;
-
-      fp = fopen(".4220_file_list.txt" ,"a+");
-
-      if(fp == NULL)
-      {
-        perror ("fopen: error: ");
-        exit (EXIT_FAILURE);
-      }
-      //testing hashes
-      fprintf(fp, "b468ef8dfcc96cc15de74496447d7b45    Assignment4.pdf\n");
-      fputs("d41d8cd98f00b204e9800998ecf8427e    foo.txt\n", fp);
-      fclose(fp);
-      fp = fopen("foo.txt" ,"a+");
-      fputs("TESTING TESTING\n", fp);
-      fclose(fp);
       
 
       /* Receiving contents command */
@@ -196,6 +189,7 @@ void server(int port)
         char garbage[BUFFER_SIZE];
         char file[BUFFER_SIZE];
         char hash[BUFFER_SIZE];
+        char hash2[BUFFER_SIZE];
         char buff2[BUFFER_SIZE];
 
         int flsz;
@@ -228,34 +222,124 @@ void server(int port)
           }
           
           else if(strncmp(req_buff,"query",5)==0){
-            char* file2[BUFFER_SIZE];
-            char* hash2[BUFFER_SIZE];
-            scanf (req_buff,"%s %s %s %s", garbage,file, hash, file2, hash2);
+            sscanf (req_buff,"%s %s %s %s", garbage,hash, hash2, file);
+            struct stat *file_info = malloc(sizeof(struct stat));
+            if (lstat(file, file_info) != 0) {
+              perror("lstat() error");
+              exit(EXIT_FAILURE);
+            }
+
+            char date[BUFFER_SIZE];
+            time_t val = file_info->st_mtime;
+            strftime(date, BUFFER_SIZE, "%Y %m %d %H %M %S", localtime(&val));
+
+            n = send(newsock, date, BUFFER_SIZE, 0);
+            if ( n < 0 ){
+              perror( "send() failed\n");
+              exit(EXIT_FAILURE);
+            }
+
+            n = recv(newsock, req_buff, BUFFER_SIZE, 0);
+
+            if ( n < 0 ){
+              perror( "recv() failed\n");
+              exit(EXIT_FAILURE);
+            }
+
+            if(strncmp(req_buff,"get",3)==0){
+              sscanf (req_buff,"%s %s %s", garbage, hash, file);
+              send_file(file, buff2,newsock,1);
+            }
+            
+            else if(strncmp(req_buff,"put",3)==0){
+              sscanf (req_buff,"%s %s %s", garbage, hash, file);
+              recv_file(file, buff2, newsock);
+            }
           }
         }
+        
+        FILE *fp = fopen(".4220_file_list.txt", "w+");
+         DIR * dirp = opendir(tmp_dirname);
+         struct dirent * dp;
+         while ((dp = readdir(dirp)) != NULL){
+            unsigned char c[MD5_DIGEST_LENGTH];
+            char *filename = dp->d_name;
+            int i;
+            if((filename[0] > 47 &&filename[0]<58)||(filename[0] > 64 &&filename[0]<91) ||(filename[0] > 96 &&filename[0]<122)){
+              FILE *inFile = fopen (filename, "rb");
+              MD5_CTX mdContext;
+              int bytes;
+              unsigned char data[1024];
+              if (inFile == NULL) {
+                  printf ("%s can't be opened.\n", filename);
+                  continue;
+              }
+              MD5_Init (&mdContext);
+              while ((bytes = fread (data, 1, 1024, inFile)) != 0)
+                  MD5_Update (&mdContext, data, bytes);
+              MD5_Final (c,&mdContext);
+
+              for(i = 0; i < MD5_DIGEST_LENGTH; i++) {fprintf(fp,"%02x", c[i]);}
+              fprintf (fp,"%s %s\n", "   ",filename);
+              fprintf (stdout,"%s %s\n", "   ",filename);
+              //fprintf(fp, "25a904b0e512ee546b3f47574703d9fc    Assignment4.txt\n");
+              fclose (inFile);
+            }
+         }
+         (void)closedir(dirp);
+        
 
       }
-
-      //Closes tmp dir
-      char rm_command[26];
-
-      strncpy (rm_command, "rm -rf ", 7 + 1);
-      strncat (rm_command, tmp_dirname, strlen (tmp_dirname) + 1);
-
-      if (system (rm_command) == -1)
-      {
-         perror ("tempdir: error: ");
-         exit (EXIT_FAILURE);
-      }
-
       close(newsock);
+    }
+   //Closes tmp dir
+    char rm_command[26];
+
+    strncpy (rm_command, "rm -rf ", 7 + 1);
+    strncat (rm_command, tmp_dirname, strlen (tmp_dirname) + 1);
+
+    if (system (rm_command) == -1)
+    {
+       perror ("tempdir: error: ");
+       exit (EXIT_FAILURE);
     }
     close(sd);
 }
 
 
-void client(int port)
-{
+void client(int port){ 
+
+ FILE *fp = fopen(".4220_file_list.txt", "w+");
+ DIR * dirp = opendir(".");
+ struct dirent * dp;
+ while ((dp = readdir(dirp)) != NULL){
+
+    unsigned char c[MD5_DIGEST_LENGTH];
+    char *filename = dp->d_name;
+    int i;
+    if((filename[0] > 47 &&filename[0]<58)||(filename[0] > 64 &&filename[0]<91) ||(filename[0] > 96 &&filename[0]<122)){
+      FILE *inFile = fopen (filename, "rb");
+      MD5_CTX mdContext;
+      int bytes;
+      unsigned char data[1024];
+      if (inFile == NULL) {
+          printf ("%s can't be opened.\n", filename);
+          continue;
+      }
+      MD5_Init (&mdContext);
+      while ((bytes = fread (data, 1, 1024, inFile)) != 0)
+          MD5_Update (&mdContext, data, bytes);
+      MD5_Final (c,&mdContext);
+
+      for(i = 0; i < MD5_DIGEST_LENGTH; i++) {fprintf(fp,"%02x", c[i]);}
+      fprintf (fp,"%s %s\n", "   ",filename);
+      fprintf (stdout,"%s %s\n", "   ",filename);
+      //fprintf(fp, "25a904b0e512ee546b3f47574703d9fc    Assignment4.txt\n");
+      fclose (inFile);
+    }
+ }
+ (void)closedir(dirp);
+
   /* create TCP client socket (endpoint) */
   int sock = socket( PF_INET, SOCK_STREAM, 0 );
   int n;
@@ -301,21 +385,11 @@ void client(int port)
     recv_file(".4220_file_list_serv.txt", buffer, sock);
 
     FILE * received_file = fopen(".4220_file_list_serv.txt", "r");
-    FILE *matches = fopen(".matches.txt", "w+");
+    FILE *matches = fopen(".4220_file_list_matches.tx", "w+");
     
 
     FILE *requests = fopen(".requests.txt", "w");
-
-    //For testing///////
-    FILE *fp = fopen(".4220_file_list.txt", "w+");
-    fprintf(fp, "b468ef8dfcc96cc15de74496447d7d45    Assignment4.pdf\n");
-    fputs("d41d8cd98f00b204e9800998ecf8425e    f3o.txt\n", fp);
-    fclose(fp);
-    fp = fopen("f3o.txt", "w+");
-    fprintf(fp, "lalalalalalaala\n");
-    fputs("TESTING\n", fp);
-    fclose(fp);
-    ///////
+    FILE *newlist = fopen(".requests.txt", "w");
 
     fp = fopen(".4220_file_list.txt", "r+");
 
@@ -340,6 +414,8 @@ void client(int port)
             else{
               fprintf(matches, "%s %s\n",s_MD5hash, s_fname);
               //query
+              fprintf(requests, "%s %s %s %s\n", "query", s_MD5hash, c_MD5hash, c_fname);
+              count++;
             }
             break;
           }
@@ -396,6 +472,7 @@ void client(int port)
     char garbage[BUFFER_SIZE];
     char file[BUFFER_SIZE];
     char hash[BUFFER_SIZE];
+    char hash2[BUFFER_SIZE];
     char buff2[BUFFER_SIZE];
     int i = 0;
 
@@ -424,9 +501,56 @@ void client(int port)
         }
         
         else if(strncmp(sendbuff,"query",5)==0){
-          char* file2[BUFFER_SIZE];
-          char* hash2[BUFFER_SIZE];
+          sscanf(sendbuff,"%s %s %s %s", garbage,hash,hash2,file);
+          struct stat *file_info = malloc(sizeof(struct stat));
+          if (lstat(file, file_info) != 0) {
+            perror("lstat() error");
+            exit(EXIT_FAILURE);
+          }
+          char date[BUFFER_SIZE];
+          time_t val = file_info->st_mtime;
+          strftime(date, BUFFER_SIZE, "%Y %m %d %H %M %S", localtime(&val));
 
+          char servdate[BUFFER_SIZE];
+          n = recv(sock, servdate, BUFFER_SIZE, 0);
+          if ( n < 0 ){
+            perror( "recv() failed\n");
+            exit(EXIT_FAILURE);
+          }
+          int cli[8];
+          int ser[8];
+          int j = 0;
+          int p = 0;
+          sscanf(date,"%d %d %d %d %d %d %d %d",&cli[0],&cli[1],&cli[2],&cli[3],&cli[4],&cli[5],&cli[6],&cli[7]);
+          sscanf(servdate,"%d %d %d %d %d %d %d %d",&ser[0],&ser[1],&ser[2],&ser[3],&ser[4],&ser[5],&ser[6],&ser[7]);
+          for(;j<8;j++){
+
+            if(cli[j] > ser[j]){
+              sprintf(sendbuff,"%s %s %s\n", "put", hash2, file);
+              p = 1;
+              break; 
+            }
+            else if(ser[j] > cli[j]){
+              sprintf(sendbuff,"%s %s %s\n", "get", hash, file);
+              break;
+            }
+          }
+          if(j == 8){
+            sprintf(sendbuff,"%s %s %s\n", "get", hash2, file);
+          }
+
+          n = send(sock, sendbuff, BUFFER_SIZE, 0); 
+          if (n < 0){
+            perror( "send() failed\n");
+            exit(EXIT_FAILURE);
+          }
+
+          if(p == 1){
+            send_file(file, buffer, sock, 0);
+          }
+          else{
+            recv_file(file, buffer,sock);
+          }
         }
       }
     }
@@ -471,7 +595,7 @@ int send_file(char* file, char* buffer, int newsock, int ack){
     exit( EXIT_FAILURE );
   }
 
-  fprintf(stdout, "Server sent %d bytes for the size\n", len);
+  fprintf(stdout, "Client/server sent %d bytes for the size\n", len);
 
   offset = 0;
   remain_data = file_stat.st_size;
