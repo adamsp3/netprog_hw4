@@ -1,0 +1,5 @@
+d41d8cd98f00b204e9800998ecf8427e    hi.txt
+6beb26a0aba7f3b673637f51d177d3e7    README.md
+6ba804208fcb3e045756551a779356c9    README.txt
+f86cbd58cbcd881dc197111c703c53f8    server.c
+f329c2c5a94e2bca1b23a7d9bb7061e8    syncr

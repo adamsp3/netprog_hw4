@@ -45,7 +45,7 @@ functionality to rsync.
 #define BUFFER_SIZE 512
 
 void die(const char*);
-int send_file(char* file, char* buffer, int newsock, int ack);
+int send_file(char* file, char* buffer, int newsock);
 int recv_file(char* file, char* buffer, int sock);
 
 void sigchld_handler(int s)
@@ -107,26 +107,24 @@ void server(int port)
     server.sin_family = PF_INET;
     server.sin_addr.s_addr = INADDR_ANY;
 
-    /* htons() is host-to-network-short for marshalling */
-    /* Internet is "big endian"; Intel is "little endian" */
     server.sin_port = htons( port );
     int len = sizeof( server );
 
-    if ( bind( sd, (struct sockaddr *)&server, len ) < 0 )
-    {
-      perror( "bind() failed" );
+    if (bind( sd, (struct sockaddr *)&server, len ) < 0){
+      perror("bind() failed");
       exit( EXIT_FAILURE );
     }
 
-    listen( sd, 5 );   /* 5 is the max number of waiting clients */
+    listen(sd, 5);   /* 5 is the max number of waiting clients */
     printf( "port %d\n", port );
 
     struct sockaddr_in client;
     int fromlen = sizeof( client );
-    printf( "server address is %s\n", inet_ntoa( server.sin_addr ) );
+    printf("server address is %s\n", inet_ntoa(server.sin_addr));
 
     char buffer[BUFFER_SIZE];
-          /* Create the temporary directory */
+
+    /* Create the temporary directory */
     char template[] = "/tmp/tmpdir.XXXXXX";
     char *tmp_dirname = mkdtemp (template);
 
@@ -139,8 +137,7 @@ void server(int port)
     printf("%s\n", tmp_dirname );
 
     /* Change directory */
-    if (chdir (tmp_dirname) == -1)
-    {
+    if (chdir (tmp_dirname) == -1){
       perror ("tempdir: error: ");
       exit (EXIT_FAILURE);
     }
@@ -149,8 +146,7 @@ void server(int port)
 
     fp = fopen(".4220_file_list.txt" ,"a+");
 
-    if(fp == NULL)
-    {
+    if(fp == NULL){
       perror ("fopen: error: ");
       exit (EXIT_FAILURE);
     }
@@ -160,29 +156,21 @@ void server(int port)
                             (socklen_t*)&fromlen);
       printf("Accepted client connection\n");
 
-        /* handle new socket in a child process,
-         allowing the parent process to immediately go
-         back to the accept() call */
+      /* handle new socket in a child process,
+      allowing the parent process to immediately go
+      back to the accept() call */
       
 
       /* Receiving contents command */
       int n = recv(newsock, buffer, BUFFER_SIZE,0);
-      if ( n < 0 ){
+      if(n < 0){
         perror( "recv() failed\n");
       }
 
       else if(n >= 0 && strncmp(buffer,"contents",8)==0){
 
-        int fd;
-        struct stat file_stat;
-        char file_size[256];
-        int remain_data;
-        int seg_size;
-        int sent_bytes = 0;
-        int offset;
-
-        //sending .4220_file_list.txt file
-        send_file(".4220_file_list.txt", buffer, newsock, 0);
+        /*Sends the file list to the client*/
+        send_file(".4220_file_list.txt", buffer, newsock);
 
         
         char req_buff[BUFFER_SIZE];
@@ -192,107 +180,121 @@ void server(int port)
         char hash2[BUFFER_SIZE];
         char buff2[BUFFER_SIZE];
 
-        int flsz;
+        int rqsz;
 
-        //Gets number of requests
+        /*Gets number of file requests (query, pull, get) */
         int n = recv(newsock, buffer, BUFFER_SIZE,0);
         if ( n < 0 ){
-          perror( "read failed\n");
+          perror( "recv() failed\n");
+          exit(EXIT_FAILURE);
         }
-        flsz = atoi(buffer);
-        fprintf(stdout, "File size : %d\n", flsz);
 
-        //recieves requests:
+        rqsz = atoi(buffer);
+        //fprintf(stdout, "File size : %d\n", rqsz);
+
+        fprintf(stdout, "Number of file transfers: %d\n", rqsz);
+        /*Receives requests*/
         int i = 0;
-        for(; i < flsz; i++){
+        for(; i < rqsz; i++){
+          /*Receive request*/
           n = recv(newsock, req_buff, BUFFER_SIZE, 0);
           if ( n < 0 ){
             perror( "recv() failed\n");
             exit(EXIT_FAILURE);
           }
-          if(strncmp(req_buff,"get",3)==0){
 
+          /*get request*/
+          if(strncmp(req_buff,"get",3)==0){
             sscanf (req_buff,"%s %s %s", garbage, hash, file);
-            send_file(file, buff2,newsock,1);
+            send_file(file, buff2,newsock);
           }
           
+          /*put request*/
           else if(strncmp(req_buff,"put",3)==0){
             sscanf (req_buff,"%s %s %s", garbage, hash, file);
             recv_file(file, buff2, newsock);
           }
           
+          /*query request*/
           else if(strncmp(req_buff,"query",5)==0){
             sscanf (req_buff,"%s %s %s %s", garbage,hash, hash2, file);
+
+            /*Get time of server file*/
             struct stat *file_info = malloc(sizeof(struct stat));
             if (lstat(file, file_info) != 0) {
               perror("lstat() error");
               exit(EXIT_FAILURE);
             }
-
             char date[BUFFER_SIZE];
             time_t val = file_info->st_mtime;
             strftime(date, BUFFER_SIZE, "%Y %m %d %H %M %S", localtime(&val));
-
+            
+            /*Send time to client*/
             n = send(newsock, date, BUFFER_SIZE, 0);
             if ( n < 0 ){
               perror( "send() failed\n");
               exit(EXIT_FAILURE);
             }
 
+            /*Receive request based on which file was newer*/
             n = recv(newsock, req_buff, BUFFER_SIZE, 0);
-
             if ( n < 0 ){
               perror( "recv() failed\n");
               exit(EXIT_FAILURE);
             }
 
+            /*get request if server file was newer*/
             if(strncmp(req_buff,"get",3)==0){
               sscanf (req_buff,"%s %s %s", garbage, hash, file);
-              send_file(file, buff2,newsock,1);
+              send_file(file, buff2,newsock);
             }
             
+            /*pur request if client file was newer*/
             else if(strncmp(req_buff,"put",3)==0){
               sscanf (req_buff,"%s %s %s", garbage, hash, file);
               recv_file(file, buff2, newsock);
             }
           }
         }
-        
-        FILE *fp = fopen(".4220_file_list.txt", "w+");
-         DIR * dirp = opendir(tmp_dirname);
-         struct dirent * dp;
-         while ((dp = readdir(dirp)) != NULL){
-            unsigned char c[MD5_DIGEST_LENGTH];
-            char *filename = dp->d_name;
-            int i;
-            if((filename[0] > 47 &&filename[0]<58)||(filename[0] > 64 &&filename[0]<91) ||(filename[0] > 96 &&filename[0]<122)){
-              FILE *inFile = fopen (filename, "rb");
-              MD5_CTX mdContext;
-              int bytes;
-              unsigned char data[1024];
-              if (inFile == NULL) {
-                  printf ("%s can't be opened.\n", filename);
-                  continue;
-              }
-              MD5_Init (&mdContext);
-              while ((bytes = fread (data, 1, 1024, inFile)) != 0)
-                  MD5_Update (&mdContext, data, bytes);
-              MD5_Final (c,&mdContext);
 
-              for(i = 0; i < MD5_DIGEST_LENGTH; i++) {fprintf(fp,"%02x", c[i]);}
-              fprintf (fp,"%s %s\n", "   ",filename);
-              fprintf (stdout,"%s %s\n", "   ",filename);
-              //fprintf(fp, "25a904b0e512ee546b3f47574703d9fc    Assignment4.txt\n");
-              fclose (inFile);
+        /*Generate new .4220_file_list.txt*/
+        FILE *fp = fopen(".4220_file_list.txt", "w+");
+        DIR * dirp = opendir(tmp_dirname);
+        struct dirent * dp;
+        while ((dp = readdir(dirp)) != NULL){
+          unsigned char c[MD5_DIGEST_LENGTH];
+          char *filename = dp->d_name;
+          int i;
+
+          /*Only filenames that begin with a number or letter are included*/
+          if((filename[0] > 47 &&filename[0]<58)||(filename[0] > 64 &&filename[0]<91) ||(filename[0] > 96 &&filename[0]<122)){
+            FILE *inFile = fopen (filename, "rb");
+            MD5_CTX mdContext;
+            int bytes;
+            unsigned char data[1024];
+            if (inFile == NULL) {
+                printf ("%s can't be opened.\n", filename);
+                continue;
             }
+            MD5_Init (&mdContext);
+            while ((bytes = fread (data, 1, 1024, inFile)) != 0)
+                MD5_Update (&mdContext, data, bytes);
+            MD5_Final (c,&mdContext);
+
+            for(i = 0; i < MD5_DIGEST_LENGTH; i++) {fprintf(fp,"%02x", c[i]);}
+            fprintf (fp,"%s %s\n", "   ",filename);
+            fclose (inFile);
+          }
          }
          (void)closedir(dirp);
-        
+         fclose(fp);
 
+      /*End this connection*/
       }
       close(newsock);
     }
-   //Closes tmp dir
+
+    /*Close tmp directory*/
     char rm_command[26];
 
     strncpy (rm_command, "rm -rf ", 7 + 1);
@@ -303,17 +305,19 @@ void server(int port)
        perror ("tempdir: error: ");
        exit (EXIT_FAILURE);
     }
+
+    /*Close socket*/
     close(sd);
 }
 
 
 void client(int port){ 
 
- FILE *fp = fopen(".4220_file_list.txt", "w+");
- DIR * dirp = opendir(".");
- struct dirent * dp;
- while ((dp = readdir(dirp)) != NULL){
-
+ /*Generate a file list based on the current directory*/
+  FILE *fp = fopen(".4220_file_list.txt", "w+");
+  DIR * dirp = opendir(".");
+  struct dirent * dp;
+  while ((dp = readdir(dirp)) != NULL){
     unsigned char c[MD5_DIGEST_LENGTH];
     char *filename = dp->d_name;
     int i;
@@ -323,7 +327,6 @@ void client(int port){
       int bytes;
       unsigned char data[1024];
       if (inFile == NULL) {
-          printf ("%s can't be opened.\n", filename);
           continue;
       }
       MD5_Init (&mdContext);
@@ -333,8 +336,6 @@ void client(int port){
 
       for(i = 0; i < MD5_DIGEST_LENGTH; i++) {fprintf(fp,"%02x", c[i]);}
       fprintf (fp,"%s %s\n", "   ",filename);
-      fprintf (stdout,"%s %s\n", "   ",filename);
-      //fprintf(fp, "25a904b0e512ee546b3f47574703d9fc    Assignment4.txt\n");
       fclose (inFile);
     }
  }
@@ -356,8 +357,7 @@ void client(int port){
     printf( "server address is %s\n", inet_ntoa(server.sin_addr));
 
     if(connect( sock, (struct sockaddr *)&server,
-                sizeof( server ) ) < 0 )
-    {
+                sizeof( server ) ) < 0 ){
       perror( "connect() failed" );
       exit( EXIT_FAILURE );
     }
@@ -369,76 +369,78 @@ void client(int port){
     int remain_data = 0;
     ssize_t len;
 
-     /*Contents*/
+     /*Calls Contents command*/
     int cont;
     char contents[BUFFER_SIZE];
     sprintf(contents,"%s", "contents");
     cont = send(sock, contents, sizeof(contents),0);
     fflush(NULL);
-    if (cont < 0)
-    {
+    if (cont < 0){
       perror( "send() failed" );
       exit( EXIT_FAILURE );
     }
 
-    //recieves .4220_file_list_serv.txt from server
+    /*recieves .4220_file_list_serv.txt from server*/
     recv_file(".4220_file_list_serv.txt", buffer, sock);
 
-    FILE * received_file = fopen(".4220_file_list_serv.txt", "r");
-    FILE *matches = fopen(".4220_file_list_matches.tx", "w+");
-    
-
+    /*
+    received_file is the file list sent by the server.
+    matches will hold the list of client files that names match
+      files on the server list.
+    requests will hold the list of requests to be sent to the server.
+      These are compiled beforehand so the server can know how many to expect.
+    */
+    FILE *received_file = fopen(".4220_file_list_serv.txt", "r");
+    FILE *matches = fopen(".4220_file_list_matches.txt", "w+");
     FILE *requests = fopen(".requests.txt", "w");
-    FILE *newlist = fopen(".requests.txt", "w");
-
     fp = fopen(".4220_file_list.txt", "r+");
 
+    /*Count the number of requests*/
     int count = 0;
     if(fp){
       int ct = 0;
       rewind(received_file);
 
+      /*Hold the names and hashes parsed from the file list*/
       char s_MD5hash[BUFFER_SIZE];
       char s_fname[BUFFER_SIZE];
       char c_MD5hash[BUFFER_SIZE];
       char c_fname[BUFFER_SIZE];
-
       while(fscanf(received_file,"%s %s", s_MD5hash, s_fname)!=EOF){
-
         rewind(fp);
+
         while(fscanf(fp,"%s %s", c_MD5hash, c_fname)!=EOF){
+          /*Checks if names match*/
           if(strncmp(s_fname,c_fname,128)==0){
+            /*Checks if hashes match*/
             if(strncmp(s_MD5hash,c_MD5hash,128)==0){
+              /*Prints them to matches*/
               fprintf(matches,"%s %s\n",s_MD5hash, s_fname);
             } 
             else{
+              /*If names match,print them to matches and add a query request to requests*/
               fprintf(matches, "%s %s\n",s_MD5hash, s_fname);
-              //query
               fprintf(requests, "%s %s %s %s\n", "query", s_MD5hash, c_MD5hash, c_fname);
+              /*Increment count of requests*/
               count++;
             }
             break;
           }
-          else{
-            //keep going
-          }
         }
 
         if(strncmp(s_fname,c_fname,128)!=0){
+          /*If a file on the server cannot be found on the client, add get request to requests*/
           fprintf(requests, "%s %s %s\n", "get", s_MD5hash, s_fname);
           count++;
-          /* Receiving file size */
-          //recv_file(s_fname, buffer,sock);
         }
       }
 
       rewind(fp);
 
-
+      /*Find the files on the client that don't match files on the server*/
       while(fscanf(fp,"%s %s", c_MD5hash, c_fname)!=EOF){
         char m_MD5hash[BUFFER_SIZE];
         char m_fname[BUFFER_SIZE];
-
         rewind(matches);
         while(fscanf(matches,"%s %s", m_MD5hash, m_fname)!=EOF){
           if(strncmp(m_fname,c_fname,128)==0){
@@ -446,11 +448,13 @@ void client(int port){
           }
         }
         if(strncmp(m_fname,c_fname,128)!=0){
+          /*If a file on the client cannot be found on the server, add put request to requests*/
           fprintf(requests,"%s %s %s\n", "put", c_MD5hash, c_fname); 
           count++;
         }
       }
     }
+
     fclose(received_file);
     fclose(matches);
     fclose(fp);
@@ -460,48 +464,54 @@ void client(int port){
     char sendbuff[BUFFER_SIZE];
 
     sprintf(sendbuff, "%d", count);
-    len = send(sock, sendbuff, BUFFER_SIZE, 0);
+
+    /*Send the number of requests*/
+    n = send(sock, sendbuff, BUFFER_SIZE, 0);
     fflush(NULL);
-    if (len < 0){
+    if (n < 0){
       perror( "send() failed" );
       exit( EXIT_FAILURE );
     }
-    fprintf(stdout, "Number of requests: %d\n", count);
+    fprintf(stdout, "Number of file transfers: %d\n", count);
 
     requests = fopen(".requests.txt", "r");
     char garbage[BUFFER_SIZE];
     char file[BUFFER_SIZE];
     char hash[BUFFER_SIZE];
     char hash2[BUFFER_SIZE];
-    char buff2[BUFFER_SIZE];
     int i = 0;
 
     rewind(requests);
-    for(; i < count; i++){
 
+    /*Send requests*/
+    for(; i < count; i++){
       if(fgets(sendbuff, BUFFER_SIZE,requests) != NULL){
         fprintf(stdout,"Request: %s", sendbuff);
-        n = send(sock, sendbuff, BUFFER_SIZE, 0); 
         
+        n = send(sock, sendbuff, BUFFER_SIZE, 0); 
         if (n < 0){
-          perror( "send() failed\n");
+          perror("send() failed\n");
           exit(EXIT_FAILURE);
         }
 
+        /*Receive file after sending a get request*/
         if(strncmp(sendbuff,"get",3)==0){
-
           sscanf (sendbuff,"%s %s %s", garbage, hash, file);
           recv_file(file, buffer,sock);
 
         }
         
+        /*Send file after sending a put request*/
         else if(strncmp(sendbuff,"put",3)==0){
           sscanf(sendbuff,"%s %s %s", garbage,hash,file);
-          send_file(file, buffer, sock, 0);
+          send_file(file, buffer, sock);
         }
         
+        /*Carry out query request*/
         else if(strncmp(sendbuff,"query",5)==0){
           sscanf(sendbuff,"%s %s %s %s", garbage,hash,hash2,file);
+
+          /*Compare dates*/
           struct stat *file_info = malloc(sizeof(struct stat));
           if (lstat(file, file_info) != 0) {
             perror("lstat() error");
@@ -545,24 +555,22 @@ void client(int port){
             exit(EXIT_FAILURE);
           }
 
+          /*If client file is newer carry out put request*/
           if(p == 1){
-            send_file(file, buffer, sock, 0);
+            send_file(file, buffer, sock);
           }
+
+          /*If server file is newer carry out put request*/
           else{
             recv_file(file, buffer,sock);
           }
         }
       }
     }
-
-
-    
-
-    
     close(sock);
 }
 
-int send_file(char* file, char* buffer, int newsock, int ack){
+int send_file(char* file, char* buffer, int newsock){
   int fd;
   struct stat file_stat;
   char file_size[BUFFER_SIZE];
@@ -583,8 +591,6 @@ int send_file(char* file, char* buffer, int newsock, int ack){
     exit( EXIT_FAILURE );
   }
 
-  fprintf(stdout, "File Size: \n%lld bytes\n", file_stat.st_size);
-
   sprintf(file_size, "%lld", file_stat.st_size);
 
   /* Sending file size */
@@ -595,8 +601,6 @@ int send_file(char* file, char* buffer, int newsock, int ack){
     exit( EXIT_FAILURE );
   }
 
-  fprintf(stdout, "Client/server sent %d bytes for the size\n", len);
-
   offset = 0;
   remain_data = file_stat.st_size;
 
@@ -604,12 +608,11 @@ int send_file(char* file, char* buffer, int newsock, int ack){
   int bytes_read = read(fd, buffer, BUFFER_SIZE);
 
   if (bytes_read < 0) {
-      perror( "read() failed" );
+      perror( "recv() failed" );
     exit( EXIT_FAILURE );
   }
 
   seg_size = BUFFER_SIZE;
-
   if(remain_data <= BUFFER_SIZE){
     seg_size = remain_data;
   }
@@ -618,9 +621,9 @@ int send_file(char* file, char* buffer, int newsock, int ack){
 
   while (remain_data > 0 && sent_bytes > 0){
     fflush(NULL);
-    fprintf(stdout, "1. Server sent %d bytes from file's data, offset is now : %d and remaining data = %d\n", sent_bytes, offset, remain_data);
+    //printf(stdout, "1. Server sent %d bytes from file's data, offset is now : %d and remaining data = %d\n", sent_bytes, offset, remain_data);
     remain_data -= sent_bytes;
-    fprintf(stdout, "2. Server sent %d bytes from file's data, offset is now : %d and remaining data = %d\n", sent_bytes, offset, remain_data);
+    //fprintf(stdout, "2. Server sent %d bytes from file's data, offset is now : %d and remaining data = %d\n", sent_bytes, offset, remain_data);
 
     if(remain_data <= BUFFER_SIZE){
       seg_size = remain_data;
@@ -646,16 +649,17 @@ int recv_file(char* file, char* buffer, int sock){
   FILE *received_file;
   int remain_data = 0;
   ssize_t len;
+
+  /*Receive file size*/
   int n = recv(sock, buffer, BUFFER_SIZE,0);
   if ( n < 0 ){
     perror( "read failed\n");
   }
   file_size = atoi(buffer);
-  fprintf(stdout, "File size : %d\n", file_size);
+  //fprintf(stdout, "File size : %d\n", file_size);
 
   received_file = fopen(file, "w");
-  if (received_file == NULL)
-  {
+  if (received_file == NULL){
     perror( "fopen() failed" );
     exit( EXIT_FAILURE );
   }
@@ -672,7 +676,7 @@ int recv_file(char* file, char* buffer, int sock){
       if(remain_data <= BUFFER_SIZE){
         seg_size = remain_data;
       }
-      fprintf(stdout, "Receive %zd bytes:- %d bytes\n", len, remain_data);
+      //fprintf(stdout, "Receive %zd bytes:- %d bytes\n", len, remain_data);
   }
 
   fclose(received_file);
